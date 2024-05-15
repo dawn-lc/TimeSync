@@ -1,5 +1,4 @@
-﻿using GuerrillaNtp;
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -10,7 +9,6 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Configuration.Install;
 using System.Threading;
-using System.Threading.Tasks;
 namespace TimeSync
 {
     public class Win32API
@@ -103,22 +101,26 @@ namespace TimeSync
 
     partial class TimeSync : ServiceBase
     {
-        private static CancellationTokenSource CTS { get; set; } = new CancellationTokenSource();
         public Config Config { get; set; }
         public string[] NTPServers { get; set; }
+        private Timer Timer { get; set; }
+
         public TimeSync(string serviceName)
         {
             ServiceName = serviceName;
-            Config = new Config(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "TimeSync.ini"));
-            NTPServers = Config.Get<string>("TimeSync", "NTPServerList", "cn.ntp.org.cn|ntp1.nim.ac.cn|ntp2.nim.ac.cn|ntp.ntsc.ac.cn|cn.pool.ntp.org|ntp.aliyun.com|ntp1.aliyun.com|ntp2.aliyun.com|ntp.tencent.com|ntp1.tencent.com|ntp2.tencent.com|pool.ntp.org|time.windows.com").Split('|');
+            Config = new Config(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "TimeSync.ini"));
+            NTPServers = Config.Get<string>("TimeSync", "NTPServerList", "ntp1.nim.ac.cn|ntp2.nim.ac.cn|ntp.ntsc.ac.cn|cn.pool.ntp.org|ntp.aliyun.com|ntp1.aliyun.com|ntp2.aliyun.com|ntp.tencent.com|ntp1.tencent.com|ntp2.tencent.com|pool.ntp.org|time.windows.com").Split('|');
         }
+
         protected override void OnStart(string[] args)
         {
-            Execute(() => Sync(args), TimeSpan.FromMinutes(15));
+            TimerCallback timerCallback = new TimerCallback(_ => Sync(args));
+            Timer = new Timer(timerCallback, null, TimeSpan.Zero, TimeSpan.FromMinutes(15));
         }
+
         protected override void OnStop()
         {
-            CTS.Cancel();
+            Timer?.Dispose();
             Config.Set("TimeSync", "NTPServerList", string.Join("|", NTPServers));
         }
 
@@ -129,13 +131,14 @@ namespace TimeSync
             DateTime netTime = DateTime.MinValue;
             foreach (var ntpServer in ntpServers)
             {
-                NtpClient client = new NtpClient(ntpServer);
                 try
                 {
-                    Console.WriteLine($"正在从NTP服务器[{ntpServer}]获取当前时间...");
-                    NtpClock clock = client.Query();
-                    netTime = clock.Now.DateTime;
-                    break;
+                    using (NTPClient client = new NTPClient(ntpServer))
+                    {
+                        Console.WriteLine($"正在从NTP服务器[{ntpServer}]获取当前时间...");
+                        netTime = client.Query();
+                        break;
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -169,14 +172,6 @@ namespace TimeSync
                 }
             }
             return;
-        }
-        public void Execute(Action action, TimeSpan delay)
-        {
-            Task.Run(action, CTS.Token).ContinueWith(_ =>
-            {
-                Task.Delay(delay, CTS.Token).Wait();
-                Execute(action, delay);
-            }, CTS.Token);
         }
     }
 
